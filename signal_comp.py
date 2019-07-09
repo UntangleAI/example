@@ -2,18 +2,18 @@
         [1] signal estimation
         [2] signal attribution of a point
 """
-__copyright__ = "Untangle License"
-__version__ = "1.0.1"
+__version__ = "0.1.0"
+__status__ = "Development"
 __date__ = "28/June/2019"
 
 import os
 import torch
-#from torchvision import models
 from tqdm import tqdm
 from copy import deepcopy
 torch.set_printoptions(precision=8)
 from datetime import datetime
 from untangle import UntangleAI
+from torchvision import models
 
 untangle_ai = UntangleAI()
 
@@ -25,7 +25,7 @@ class MnistArgs:
     input_tensor = torch.randn(1,1,28,28) # provide your own input tensor
     input_tensor_true = torch.randn(28,28,1) # provide your own true input tensor / ndarray / PIL Image Obj
     data_class = None # or `None` to estimate all classes
-    mode = 'estimate' # one of `estimate`, `attribute`
+    mode = 'attribute' # one of `estimate`, `attribute`
     topk = 5
     cmap = 'seismic'
     json = False
@@ -169,8 +169,7 @@ def attribute_signals(base_model, base_input_tensor, input_tensor_true,
     rgb_heatmaps, channel_heatmaps = untangle_ai.visualization().get_joint_diff_heatmaps(topk_gradients, args)
     out_path = os.path.join(module_path, out_name)
     if(args.json):
-        # TODO: saving joint difference heatmap is pending
-        untangle_ai.visualization().save_joint_heatmaps(rgb_heatmaps, channel_heatmaps, topk_prob,
+        untangle_ai.visualization().save_joint_diff_heatmaps(rgb_heatmaps, channel_heatmaps, topk_prob,
                                            topk_classes, out_path, img_size)
     else:
         untangle_ai.visualization().visualize_joint_diff_heatmaps(input_tensor_true, rgb_heatmaps, channel_heatmaps,
@@ -262,7 +261,7 @@ if __name__ == '__main__':
 
             # data_path = '../imagenet_test/data/train/'
             # SYNSET_MAP = {'945': 'n07720875'} # bell pepper example
-            # loader, _ = data_util.load_imagenet_per_class(batch_size=args.batch_size,
+            # loader, _ = untangle_ai.load_imagenet_per_class(batch_size=args.batch_size,
             #                                 data_path=data_path,
             #                                 synset_map=SYNSET_MAP, data_class=class_i,
             #                                 is_resnet='True')

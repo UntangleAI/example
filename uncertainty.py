@@ -3,8 +3,7 @@
         [2] uncertainty evaluation of a point
         [3] uncertainty ranking of a dataset
 """
-__copyright__ = "Untangle License"
-__version__ = "1.0.1"
+__version__ = "0.1.0"
 __status__ = "Development"
 __date__ = "28/June/2019"
 
