@@ -3,13 +3,15 @@
         [2] uncertainty evaluation of a point
         [3] uncertainty ranking of a dataset
 """
-__version__ = "0.1.0"
+__copyright__ = "Untangle License"
+__version__ = "1.0.1"
 __status__ = "Development"
 __date__ = "28/June/2019"
 
 import os
 import argparse
 import torch
+import random
 from tqdm import tqdm
 from copy import deepcopy
 torch.set_printoptions(precision=8)
@@ -17,8 +19,12 @@ from time import time
 from datetime import datetime
 from untangle import UntangleAI
 from torchvision import models
-
 untangle_ai = UntangleAI()
+
+torch.manual_seed(42)
+torch.cuda.manual_seed(42)
+random.seed(42)
+torch.backends.cudnn.deterministic=True
 
 class MnistArgs:
     mname = 'lenet'
@@ -40,10 +46,10 @@ class Args:
     img_size = (3,224,224)
     torch.manual_seed(0)
     input_tensor = torch.randn(1,3,224,224) # provide your own input tensor
-    data_class = '623' # or `None` to model uncertainty for all classes
-    mode = 'eval_point' # one of `model`, `eval_point`, `rank`
+    data_class = '0' # or `None` to model uncertainty for all classes
+    mode = 'model' # one of `model`, `eval_point`, `rank`
     out_thres = 0.3 # outlier threshold (default: `30%% of cluster2cluster distance`)
-    dir = '../Kannada/Img/GoodImg/Bmp/Sample004'
+    dir = '../imagenet_test/data/ranking_test_data/'
     rank_type = 'global' # in case of class by clas ranking, pass `local` rank_type
     metric = 'prob' # for future additions. Current default set to `prob`
 
@@ -131,10 +137,9 @@ class LeNet(torch.nn.Module):
         output = self.classifier(output)
         return(output)
 
-
 if __name__ == '__main__':
-    # args = Args()
-    args = MnistArgs()
+    args = Args()
+    # args = MnistArgs()
     keys = [str(item) for item in range(args.num_classes)]
     ID2Name_Map = dict(zip(keys, keys)) # backward compatibility to existing codebase
 
@@ -151,47 +156,52 @@ if __name__ == '__main__':
         os.makedirs(results_path)
     uncertainty_store_path = os.path.join(model_uncrt_data_path, '{}_uncertainty'.format(args.mname))
 
-    #################################################################
-    # Step-2: load model from checkpoint                            #
-    #################################################################
-    #model_ckpt_path = os.path.join(module_path, 'lenet_mnist_model.h5')
-    model_ckpt_path = os.path.join(module_path, 'lenet_mnist_model.h5')
-    if(not os.path.isfile(model_ckpt_path)):
-        raise FileNotFoundError(model_ckpt_path)
-    print("Loading model checkpoint...", end="", flush=True)
-    model = LeNet()
-    model.build()
-    if (torch.cuda.is_available()):
-        ckpt = torch.load(model_ckpt_path)
-        model.load_state_dict(ckpt)
-        model = model.cuda()
-    else:
-        ckpt = torch.load(model_ckpt_path, map_location='cpu')
-        model.load_state_dict(ckpt)
-
-    print("Done!")
-    model.eval()
+    ################################################################
+    # Step-2: load model from checkpoint                           #
+    ################################################################
+    # model_ckpt_path = os.path.join(module_path, 'lenet_mnist_model.h5')
+    # if(not os.path.isfile(model_ckpt_path)):
+    #     raise FileNotFoundError(model_ckpt_path)
+    # print("Loading model checkpoint...", end="", flush=True)
+    # model = LeNet()
+    # model.build()
+    # if (torch.cuda.is_available()):
+    #     ckpt = torch.load(model_ckpt_path)
+    #     model.load_state_dict(ckpt)
+    #     model = model.cuda()
+    # else:
+    #     ckpt = torch.load(model_ckpt_path, map_location='cpu')
+    #     model.load_state_dict(ckpt)
+    # print("Done!")
+    # model.eval()
 
     # print("Loading model checkpoint...", end="", flush=True)
-    # model = models.vgg16(pretrained=True)
+    # model = models.inception_v3(pretrained=True)
     # if(torch.cuda.is_available()):
     #     model = model.cuda()
     # model.eval()
     # print("Done!")
+
+    print("Loading model checkpoint...", end="", flush=True)
+    model = models.vgg16(pretrained=True)
+    if(torch.cuda.is_available()):
+        model = model.cuda()
+    model.eval()
+    print("Done!")
 
     #################################################################
     # Step-3: If mode=`model`, model uncertainty for specified class#
     #################################################################
     if(args.mode == 'model'):
         def train_loader_fun(class_i):
-            loader, _ = untangle_ai.load_mnist_per_class(batch_size=args.batch_size, data_class=class_i)
+            # loader, _ = untangle_ai.load_mnist_per_class(batch_size=args.batch_size, data_class=class_i)
 
-            # data_path = '../imagenet_test/data/train/'
-            # SYNSET_MAP = {'623': 'n03658185'}
-            # loader, _ = data_util.load_imagenet_per_class(batch_size=args.batch_size,
-            #                                 data_path=data_path,
-            #                                 synset_map=SYNSET_MAP, data_class=class_i,
-            #                                 is_resnet='False')
+            data_path = '../imagenet_test/data/train/'
+            SYNSET_MAP = {'0': 'n01440764'}
+            loader, _ = untangle_ai.load_imagenet_per_class(batch_size=args.batch_size,
+                                            data_path=data_path,
+                                            synset_map=SYNSET_MAP, data_class=class_i,
+                                            is_resnet='False')
             return(loader)
 
         model_uncertainty(model, uncertainty_store_path, train_loader_fun, args)
@@ -216,8 +226,20 @@ if __name__ == '__main__':
         if(not os.path.exists(base_out_path)):
             os.makedirs(base_out_path)
 
+        from services import data_loader
+        from torchvision import transforms
+        import PIL
+        transform = transforms.Compose([
+            transforms.Resize((256, 256), interpolation=PIL.Image.NEAREST),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
+        ])
+        data_gen = data_loader.get_input_gen(args.dir, subdirs=['sub1', 'sub2', 'sub3'],
+                                             img_size=args.img_size, transform=transform)
         t1 = time()
-        untangle_ai.rank_data(model, uncertainty_store_path, base_out_path, ID2Name_Map, args)
+        untangle_ai.rank_data(model, data_gen, uncertainty_store_path, base_out_path, ID2Name_Map, args)
         print("completed in: {}".format(time() - t1))
 
     else:
