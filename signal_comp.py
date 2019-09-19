@@ -2,20 +2,23 @@
         [1] signal estimation
         [2] signal attribution of a point
 """
-__version__ = "0.1.0"
-__status__ = "Development"
-__date__ = "28/June/2019"
+__author__ = "Rahul Soni"
+__copyright__ = "Untangle License"
+__version__ = "1.0.6"
 
 import os
 import torch
-from tqdm import tqdm
-from copy import deepcopy
+import random
 torch.set_printoptions(precision=8)
-from datetime import datetime
 from untangle import UntangleAI
 from torchvision import models
-
 untangle_ai = UntangleAI()
+from tqdm import tqdm
+
+torch.manual_seed(42)
+torch.cuda.manual_seed(42)
+random.seed(42)
+torch.backends.cudnn.deterministic=True
 
 class MnistArgs:
     mname = 'lenet'
@@ -26,7 +29,7 @@ class MnistArgs:
     input_tensor_true = torch.randn(28,28,1) # provide your own true input tensor / ndarray / PIL Image Obj
     data_class = None # or `None` to estimate all classes
     mode = 'attribute' # one of `estimate`, `attribute`
-    topk = 5
+    topk = 1
     cmap = 'seismic'
     json = False
     hm_diff = 'joint'
@@ -39,141 +42,11 @@ class Args:
     input_tensor = torch.randn(1,3,224,224) # provide your own input tensor
     input_tensor_true = torch.randn(224,224,3) # provide your own true input tensor / ndarray / PIL Image Obj
     data_class = '945' # or `None` to estimate all classes
-    mode = 'attribute' # one of `estimate`, `attribute`
-    topk = 1
+    mode = 'estimate' # one of `estimate`, `attribute`
+    topk = 5
     cmap = 'seismic'
     json = False
     hm_diff = 'joint'
-
-def estimate_signals(base_model, signal_store_path, train_loader_fun, args):
-    '''
-    estimates signals class by class
-    :param base_model: pytorch model object
-    :param signal_store_path: path to store signal for each class
-    :param train_loader_fun: data loader function that takes class_idx as arg
-    :param args: data specific params (ref to MnistArgs class)
-    :return: None
-    '''
-
-    ############################################################
-    # Train accordingly to the following rule                  #
-    #   [1] If data-class is specified, train that class       #
-    #   [2] Else train all classes                             #
-    ############################################################
-    stats_store_path = "temp_stats_store_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".h5"
-
-    if(args.data_class is not None):
-        class_list = [args.data_class]
-    else:
-        class_list = list(range(args.num_classes))
-        class_list = [str(item) for item in class_list]
-
-    for class_i in class_list:
-        print("Estimating signals for class: `{}`".format(class_i))
-        model = deepcopy(base_model)
-
-        signal_estimator = untangle_ai.signal_estimator(model=model, img_size=args.img_size,
-                                             stats_store_path=stats_store_path)
-
-        train_loader = train_loader_fun(class_i)
-        for (input_tensor, target) in tqdm(train_loader):
-            if(input_tensor is None):
-                continue
-            else:
-                if(torch.cuda.is_available()):
-                    input_tensor = input_tensor.cuda()
-                signal_estimator.update_stats(input_tensor)
-        signal_estimator.close_stats_files_if_open()
-
-        #############################################################
-        # Save signals for future investigation:                    #
-        #############################################################
-        signal_estimator.compute_signals()
-        signal_path_for_class_i = signal_store_path + '_class_{}.pkl'.format(class_i)
-        signal_estimator.save_signals(signal_path_for_class_i)
-        print('signals saved in path: {}'.format(signal_path_for_class_i))
-        del signal_estimator
-        del model
-
-    # Clean-up of temp file
-    if(os.path.exists(stats_store_path)):
-        os.remove(stats_store_path)
-
-def _attribute(base_model, base_input_tensor, signals_path, class_idx, args):
-
-    model = deepcopy(base_model)
-    input_tensor = deepcopy(base_input_tensor)
-    input_tensor = torch.autograd.Variable(input_tensor, requires_grad=True)
-    model.eval()
-    outp = model(input_tensor)
-    one_hot_output = torch.zeros_like(outp).to(outp.device)
-    one_hot_output[:, class_idx] = 1.0
-    model.zero_grad()
-
-    signal_store_path = signals_path + '_class_{}.pkl'.format(class_idx)
-    if (not os.path.isfile(signal_store_path)):
-        raise FileNotFoundError(signal_store_path)
-    print("Using signals: {}".format(signal_store_path))
-
-    signalModel = untangle_ai.signal_attribution(model, args.img_size, signal_store_path)
-    signalModel.update_model()
-
-    outp.backward(gradient=one_hot_output)
-    signal = input_tensor.grad
-    return(signal.detach())
-
-def attribute_signals(base_model, base_input_tensor, input_tensor_true,
-                  signals_path, ID2Name_Map, args, out_name='signal.JPEG'):
-    '''
-    get signal attributes for an input image
-    :param base_model: pytorch model object
-    :param base_input_tensor: torch tensor of shape: (1,C,H,W)
-    :param input_tensor_true: torch tensor / ndaray / PIL Image obj, of shape (H,W,C)
-    :param signals_path: path where signal estimates reside
-    :param args: args of type Args
-    :param out_name: optional, out_name of visualizations
-    :return: None
-    '''
-
-    if (torch.cuda.is_available()):
-        base_input_tensor = base_input_tensor.cuda()
-
-    topk_logits, topk_prob, topk_classes, topk_indices = untangle_ai.get_topk_pred(base_model,
-                                                    base_input_tensor, ID2Name_Map, args.topk)
-    print("Top-{} class(es): {}".format(args.topk, topk_classes))
-    print("Top-{} indices(s): {}".format(args.topk,topk_indices))
-    print("Top-{} logit(s): {}".format(args.topk,topk_logits))
-    print("Top-{} probs(s): {}".format(args.topk,topk_prob))
-
-    topk_gradients = []
-    for idx, class_idx in enumerate(topk_indices):
-        print("-" * 70)
-        print("{} Signal visualization for class: {} [{}]".
-              format(" " * 4, topk_classes[idx], topk_indices[idx]))
-        print("-" * 70)
-        gradient = _attribute(base_model, base_input_tensor, signals_path, class_idx, args)
-        topk_gradients.append(gradient)
-
-    # signal heatmaps
-    rgb_heatmaps, channel_heatmaps = untangle_ai.visualization().get_joint_heatmaps(topk_gradients, args)
-    out_path = os.path.join(module_path, out_name)
-    img_size = (args.img_size[1], args.img_size[2], args.img_size[0])  # channel last
-    if(args.json):
-        untangle_ai.visualization().save_joint_heatmaps(rgb_heatmaps, channel_heatmaps, topk_prob,
-                                           topk_classes, out_path, img_size)
-    else:
-        untangle_ai.visualization().visualize_joint_heatmaps(input_tensor_true, rgb_heatmaps, channel_heatmaps,
-                                                out_path, img_size)
-
-    # difference heatmaps
-    rgb_heatmaps, channel_heatmaps = untangle_ai.visualization().get_joint_diff_heatmaps(topk_gradients, args)
-    out_path = os.path.join(module_path, out_name)
-    if(args.json):
-        untangle_ai.visualization().save_joint_diff_heatmaps(rgb_heatmaps, channel_heatmaps, topk_prob,
-                                           topk_classes, out_path, img_size)
-    else:
-        untangle_ai.visualization().visualize_joint_diff_heatmaps(input_tensor_true, rgb_heatmaps, channel_heatmaps,
-                                                     out_path, img_size)
 
 class LeNet(torch.nn.Module):
     # TODO: This isn't really a LeNet, but we implement this to be
@@ -267,18 +140,21 @@ if __name__ == '__main__':
             #                                 is_resnet='True')
             return(loader)
 
-        estimate_signals(model, signal_store_path, train_loader_fun, args)
+
+        untangle_ai.estimate_signals(model, signal_store_path, train_loader_fun, args)
 
     #################################################################
     # Step-4: If mode=`eval_point`, evaluate uncertainty of a point #
     #################################################################
     elif(args.mode == 'attribute'):
-        input_tensor = args.input_tensor # expected shape (1,C,H,W)
-        input_tensor_true = args.input_tensor_true # expected shape (H,W,C)
-        out_name = 'results/{}_{}'.format(args.mname, 'test_img')
-
-        attribute_signals(model, input_tensor, input_tensor_true, signal_store_path,
-                          ID2Name_Map, args, out_name)
+        data_gen = untangle_ai.mnist_data_gen(args.batch_size, results_path, gen_images=False)
+        for img_path, input_tensor in tqdm(data_gen):
+            for idx in range(len(img_path)):
+                input_tensor_single = input_tensor[idx][None, :, :, :]
+                input_tensor_true = input_tensor[idx].permute(1, 2, 0) # expected shape (H,W,C)
+                out_prefix = os.path.join(results_path, '{}_signals'.format(img_path[idx]))
+                untangle_ai.attribute_signals(model, input_tensor_single, input_tensor_true, signal_store_path,
+                          ID2Name_Map, args, out_prefix)
 
     else:
         raise ValueError('invalid mode argument `{}`.'
